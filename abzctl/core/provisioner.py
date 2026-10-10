@@ -5,6 +5,8 @@ Vazifalari:
 - `curl`, `git` va yordamchi paketlarni o'rnatish;
 - Docker (rasmiy get.docker.com skripti) va Docker Compose plaginini o'rnatish;
 - Caddy'ni rasmiy Cloudsmith APT reposi orqali o'rnatish;
+- Railpack va docker buildx'ni o'rnatish (Dockerfile'siz loyihalar uchun);
+- RAM kam bo'lsa swap yaratish (build xotira yetmay yiqilmasligi uchun);
 - `check-server` buyrug'i uchun server haqida ma'lumot yig'ish.
 
 Barcha metodlar idempotent: dastur allaqachon o'rnatilgan bo'lsa, qayta o'rnatilmaydi.
@@ -23,6 +25,8 @@ CADDY_GPG_URL = "https://dl.cloudsmith.io/public/caddy/stable/gpg.key"
 CADDY_REPO_URL = "https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt"
 CADDY_KEYRING = "/usr/share/keyrings/caddy-stable-archive-keyring.gpg"
 CADDY_SOURCES = "/etc/apt/sources.list.d/caddy-stable.list"
+
+RAILPACK_INSTALL_URL = "https://railpack.com/install.sh"
 
 
 @dataclass
@@ -232,6 +236,71 @@ class Provisioner:
             hint="Caddy xizmatini ishga tushirib bo'lmadi: `journalctl -u caddy` ni tekshiring.",
         )
         return source
+
+    def ensure_buildx(self, on_line: Optional[LineCallback] = None) -> bool:
+        """`docker buildx` plaginini tekshiradi (Railpack build uchun kerak).
+
+        get.docker.com uni o'zi o'rnatadi; Docker OS reposidan (docker.io) o'rnatilgan
+        bo'lsa, plagin alohida paket sifatida o'rnatiladi.
+        """
+        if self.ssh.run("docker buildx version", sudo=True, check=False).ok:
+            return False
+        for package in ("docker-buildx-plugin", "docker-buildx"):
+            try:
+                self._apt_install([package], on_line)
+                break
+            except RemoteCommandError:
+                continue
+        if not self.ssh.run("docker buildx version", sudo=True, check=False).ok:
+            raise ProvisionError(
+                "docker buildx o'rnatib bo'lmadi.",
+                hint="Docker'ni rasmiy skript bilan qayta o'rnating: curl -fsSL https://get.docker.com | sh",
+            )
+        return True
+
+    def ensure_railpack(self, on_line: Optional[LineCallback] = None) -> bool:
+        """Railpack CLI'ni (loyiha turini aniqlab, image yasovchi vosita) o'rnatadi/yangilaydi."""
+        if self.ssh.command_exists("railpack"):
+            return False
+        self.ssh.run(
+            f"curl -sSL {RAILPACK_INSTALL_URL} | sh -s -- --yes; code=$?;"
+            " rm -f /tmp/tmp.*-railpack.*.tar.gz; exit $code",
+            sudo=True,
+            on_line=on_line,
+            hint="Railpack'ni o'rnatib bo'lmadi. Serverdan github.com ga kirish borligini tekshiring.",
+        )
+        if not self.ssh.command_exists("railpack"):
+            raise ProvisionError("Railpack o'rnatildi, lekin `railpack` buyrug'i topilmadi.")
+        return True
+
+    def ensure_swap(self, min_memory_mb: int = 2048, swap_size: str = "2G") -> Optional[str]:
+        """RAM kam bo'lgan serverda swap fayl yaratadi — aks holda build xotira yetmay yiqiladi.
+
+        Bu majburiy emas: swap yaratib bo'lmasa (masalan konteyner/VPS cheklovi), deploy davom etadi.
+
+        Returns:
+            Yaratilgan swap hajmi yoki None (kerak emas / yaratib bo'lmadi).
+        """
+        meminfo = self.ssh.read_file("/proc/meminfo") or ""
+        values: Dict[str, int] = {}
+        for line in meminfo.splitlines():
+            key, _, rest = line.partition(":")
+            parts = rest.split()
+            if parts and parts[0].isdigit():
+                values[key] = int(parts[0]) // 1024  # kB -> MB
+        if values.get("MemTotal", min_memory_mb) >= min_memory_mb or values.get("SwapTotal", 0) > 0:
+            return None
+        result = self.ssh.run(
+            f"[ -f /swapfile ] || (fallocate -l {swap_size} /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048)"
+            " && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile"
+            " && (grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab)",
+            sudo=True,
+            check=False,
+        )
+        if not result.ok:
+            self.ssh.run("swapoff /swapfile 2>/dev/null; rm -f /swapfile", sudo=True, check=False)
+            return None
+        return swap_size
 
     def open_firewall_ports(self, on_line: Optional[LineCallback] = None) -> bool:
         """UFW faol bo'lsa, HTTP/HTTPS (80, 443) portlarini ochadi.

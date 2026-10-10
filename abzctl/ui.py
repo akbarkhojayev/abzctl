@@ -82,6 +82,11 @@ class Step:
         self.title = title
         self._status = status
         self._verbose = verbose
+        self.failed = False
+
+    def fail(self) -> None:
+        """Bosqichni xatosiz, lekin muvaffaqiyatsiz tugagan deb belgilaydi (✖ ko'rsatiladi)."""
+        self.failed = True
 
     def update(self, message: str) -> None:
         self._status.update(f"[bold cyan]{escape(self.title)}[/] [dim]— {escape(message)}[/]")
@@ -110,7 +115,14 @@ def step(title: str, verbose: bool = False) -> Iterator[Step]:
             console.print(f"[bold red]✖[/] {escape(title)} [dim]({elapsed:.1f}s)[/]")
             raise
     elapsed = time.monotonic() - started
-    console.print(f"[bold green]✔[/] {escape(title)} [dim]({elapsed:.1f}s)[/]")
+    mark = "[bold red]✖[/]" if current.failed else "[bold green]✔[/]"
+    console.print(f"{mark} {escape(title)} [dim]({elapsed:.1f}s)[/]")
 
 
 LineCallback = Callable[[str], None]
+
+
+def section(title: str) -> None:
+    """Wizard bo'limlari orasida sarlavhali chiziq chiqaradi."""
+    console.print()
+    console.rule(f"[bold cyan]{escape(title)}[/]", align="left", style="cyan")

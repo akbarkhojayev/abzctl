@@ -4,15 +4,15 @@ Ish tartibi:
 1. Repo havolasidan loyiha nomini aniqlash (masalan `my-app`).
 2. Serverda `/var/www/<project_name>` papkasini tayyorlash.
 3. Papka bo'sh bo'lsa `git clone`, git repo bo'lsa `git pull` qilish.
-4. Compose faylini topish va `docker compose up -d --build` ni bajarish.
+4. `docker compose up -d --build` ni bajarish (compose faylini `analyzer.py` tayyorlaydi).
 5. Ilova `localhost:<app_port>` da javob berayotganini tekshirish.
 """
 
+import json
 import re
 import shlex
 import time
-from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional, Tuple
 
 from abzctl.core.ssh_client import LineCallback, SSHClient
 from abzctl.exceptions import DeployError
@@ -49,16 +49,6 @@ def validate_repo_url(repo: str) -> None:
             f"Noto'g'ri repo havolasi: {repo}",
             hint="Masalan: https://github.com/user/project.git yoki git@github.com:user/project.git",
         )
-
-
-@dataclass
-class DeployResult:
-    project_name: str
-    project_dir: str
-    action: str  # "cloned" yoki "updated"
-    commit: str
-    compose_file: str
-    app_healthy: Optional[bool]
 
 
 class Deployer:
@@ -146,36 +136,66 @@ class Deployer:
         res = self.ssh.run(f"git -C {self._dir} log -1 --format='%h — %s'", check=False)
         return res.stdout.strip() or "-"
 
-    def find_compose_file(self) -> str:
-        """Loyiha ildizidagi compose faylini topadi."""
+    def _compose(self, compose_file: str, args: str) -> str:
+        """`docker compose` buyrug'ini loyiha nomi (-p) va fayli (-f) bilan yasaydi.
+
+        Loyiha nomi har doim aniq beriladi: generatsiya qilingan compose fayli
+        `.abzctl/` papkasida turganda ham konteynerlar to'g'ri nomlanadi.
+        """
+        return (
+            f"cd {self._dir} && docker compose -p {shlex.quote(self.project_name)} "
+            f"-f {shlex.quote(compose_file)} {args}"
+        )
+
+    def find_compose_file(self) -> Optional[str]:
+        """Loyiha ildizidagi compose faylini topadi (yo'q bo'lsa None)."""
         for name in COMPOSE_FILES:
             if self.ssh.run(f"test -f {self._dir}/{name}", check=False).ok:
                 return name
-        raise DeployError(
-            f"{self.project_dir} ichida compose fayli topilmadi.",
-            hint=f"Loyiha ildizida quyidagilardan biri bo'lishi kerak: {', '.join(COMPOSE_FILES)}",
-        )
+        return None
+
+    def published_ports(self, compose_file: str) -> List[Tuple[str, int]]:
+        """Compose faylida tashqariga ochilgan (publish qilingan) portlarni aniqlaydi.
+
+        `docker compose config` compose faylini to'liq tahlil qiladi (o'zgaruvchilar,
+        qisqa/uzun port sintaksisi), shuning uchun YAML'ni o'zimiz o'qimaymiz.
+
+        Returns:
+            (servis_nomi, port) juftliklari ro'yxati. Aniqlab bo'lmasa — bo'sh ro'yxat.
+        """
+        res = self.ssh.run(self._compose(compose_file, "config --format json"), sudo=True, check=False)
+        if not res.ok:
+            return []
+        try:
+            services = json.loads(res.stdout).get("services", {})
+        except ValueError:
+            return []
+        ports: List[Tuple[str, int]] = []
+        for service, spec in services.items():
+            for entry in spec.get("ports") or []:
+                published = str(entry.get("published", "")).split("-")[0]
+                if published.isdigit() and entry.get("protocol", "tcp") == "tcp":
+                    ports.append((service, int(published)))
+        return ports
 
     def compose_up(self, compose_file: str, on_line: Optional[LineCallback] = None) -> None:
         """`docker compose up -d --build` ni bajaradi."""
         self.ssh.run(
-            f"cd {self._dir} && docker compose -f {shlex.quote(compose_file)} up -d --build --remove-orphans",
+            self._compose(compose_file, "up -d --build --remove-orphans"),
             sudo=True,
             on_line=on_line,
             hint="Docker image build yoki konteynerni ishga tushirish muvaffaqiyatsiz. Yuqoridagi logni ko'ring.",
         )
 
-    def compose_ps(self, compose_file: str) -> str:
+    def compose_logs(self, compose_file: str, tail: int = 30) -> str:
+        """Konteynerlarning oxirgi loglarini qaytaradi (ilova ishlamay qolganda ko'rsatish uchun)."""
         res = self.ssh.run(
-            f"cd {self._dir} && docker compose -f {shlex.quote(compose_file)} ps "
-            "--format 'table {{.Service}}\t{{.State}}\t{{.Ports}}'",
-            sudo=True,
-            check=False,
+            self._compose(compose_file, f"logs --no-color --tail {tail}"), sudo=True, check=False
         )
-        return res.stdout.strip()
+        return res.output
 
-    def wait_for_app(self, app_port: int, attempts: int = 10, delay: float = 3.0) -> bool:
-        """Ilova `localhost:<app_port>` da HTTP javob qaytarishini kutadi.
+    def wait_for_app(self, app_port: int, attempts: int = 20, delay: float = 3.0) -> bool:
+        """Ilova `localhost:<app_port>` da HTTP javob qaytarishini kutadi (~1 daqiqagacha).
 
         Har qanday HTTP status (hatto 404) ilova ishlayotganini bildiradi.
         """
@@ -189,3 +209,21 @@ class Deployer:
                 return True
             time.sleep(delay)
         return False
+
+    def wait_for_running(self, compose_file: str, service: str = "app", checks: int = 3, delay: float = 5.0) -> bool:
+        """Fon jarayoni (bot) uchun tekshiruv: konteyner ishlab turibdi va qayta-qayta yiqilmayapti.
+
+        HTTP port bo'lmagani uchun konteyner holati bir necha marta tekshiriladi.
+        """
+        for _ in range(checks):
+            time.sleep(delay)
+            res = self.ssh.run(
+                f"docker inspect -f '{{{{.State.Running}}}} {{{{.RestartCount}}}}' "
+                f"$({self._compose(compose_file, f'ps -q {shlex.quote(service)}')})",
+                sudo=True,
+                check=False,
+            )
+            parts = res.stdout.split()
+            if not res.ok or len(parts) != 2 or parts[0] != "true" or parts[1] != "0":
+                return False
+        return True
