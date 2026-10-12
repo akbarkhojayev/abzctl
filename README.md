@@ -85,7 +85,22 @@ abzctl oxirgi deploy'ni eslab qoladi va faqat bitta narsani so'raydi:
 Shu loyihani yangilaymizmi? [y/n] (y):
 ```
 
-Parollar hech qachon saqlanmaydi. Ular har safar so'raladi.
+SSH parollari saqlanmaydi. Ular har safar so'raladi. Ilova tokenlari va baza
+parollari serverdagi `.env` va `.abzctl/services.json` fayllarida `600` ruxsat bilan
+saqlanadi. Lokal deploy profili ham `600` ruxsat bilan yoziladi.
+
+### Birinchi SSH ulanishi
+
+abzctl serverning SSH kalitini `~/.ssh/known_hosts` orqali tekshiradi. Yangi serverga
+avval oddiy SSH bilan ulaning va ko'rsatilgan fingerprint'ni server provayderi
+ma'lumoti bilan solishtiring:
+
+```bash
+ssh -p 22 root@203.0.113.10
+```
+
+Kalit o'zgarsa, sababini tekshiring. abzctl noma'lum yoki o'zgargan kalitni
+avtomatik qabul qilmaydi.
 
 ---
 
@@ -181,7 +196,9 @@ yoziladi.
 | Parol xato | Qayta kiriting (3 marta urinish mumkin) |
 | Loyiha turi aniqlanmadi | Repo'ga `Dockerfile` qo'shing |
 | Ilova javob bermadi | Chiqarilgan loglarni o'qing; ilova `PORT` o'zgaruvchisini tinglayotganini tekshiring |
-| Private (yopiq) repo klonlanmadi | Havolada token ishlating: `https://<TOKEN>@github.com/user/app.git` |
+| Private (yopiq) repo klonlanmadi | Serverda repo uchun SSH deploy key sozlang va `git@github.com:user/app.git` havolasini ishlating |
+| SSH server kaliti topilmadi | Oddiy `ssh` bilan ulaning va server fingerprint'ini tekshiring |
+| Bir nechta Compose porti topildi | `--app-port` bilan asosiy HTTP portini bering |
 
 Batafsil log ko'rish uchun: `abzctl deploy -v`
 
@@ -191,10 +208,47 @@ Serverni deploy'siz faqat tekshirish uchun: `abzctl check-server`
 
 ## Qo'shimcha: savol-javobsiz ishlatish (CI/skriptlar uchun)
 
-Barcha qiymatlarni flaglar bilan berish mumkin. Bunda abzctl hech narsa so'ramaydi:
+`-y` barcha interaktiv savollarni o'chiradi. Server va repo parametrlarini bering;
+majburiy token yoki sozlama yetishmasa, buyruq xato kodi bilan tugaydi:
 
 ```bash
 ABZCTL_PASSWORD='parol' abzctl deploy -h 203.0.113.10 -r https://github.com/user/app.git -d app.example.com -y
 ```
 
+Ilova sozlamalarini takrorlanadigan `--env NOM=QIYMAT` bilan berish mumkin.
+Bu flag mavjud `.env` faylidagi berilgan qiymatni ham yangilaydi; boshqa sozlamalar
+saqlanadi. Baza uchun abzctl yaratadigan ulanish qiymatlari konteynerda ustun turadi.
+
+Maxfiy qiymatni buyruq argumentiga yozmaslik uchun `ABZCTL_ENV_<NOM>` muhit
+o'zgaruvchisidan foydalaning. Bu usul `.env` birinchi yaratilayotganda ishlatiladi:
+
+```bash
+ABZCTL_PASSWORD='parol' ABZCTL_ENV_BOT_TOKEN='token' abzctl deploy \
+  -h 203.0.113.10 -r https://github.com/user/bot.git -y
+```
+
+Private repo uchun serverning GitHub/GitLab SSH deploy key'i va Git hostining
+`known_hosts` yozuvi oldindan sozlangan bo'lishi kerak. Havolaga token yoki parol
+qo'shish qabul qilinmaydi. Oldingi lokal profildagi URL tokenlari avtomatik olib tashlanadi.
+
+`--name` 1–63 belgidan iborat bo'ladi: kichik harf, raqam, `_` yoki `-`;
+birinchi belgi harf yoki raqam bo'lishi kerak.
+
+Ilova HTTP javob bermasa yoki bot qayta-qayta to'xtasa, abzctl `exit code 1`
+bilan tugaydi. Oxirgi muvaffaqiyatli deploy profili almashtirilmaydi va domen
+konfiguratsiyasi yangilanmaydi. Oldingi konteyner versiyasiga avtomatik rollback
+qilinmaydi; muvaffaqiyatsiz yangilashdan keyin loglarni tekshirish kerak.
+
 Barcha flaglar ro'yxati: `abzctl deploy --help`
+
+## Ishlab chiqish va tekshiruv
+
+```bash
+python -m pip install -e .
+python -m unittest discover -s tests -v
+bash -n install.sh
+```
+
+Testlar SSH va deploy oqimini mock bilan tekshiradi. Docker Compose mavjud bo'lsa,
+generatsiya qilingan YAML va `.env` haqiqiy Compose parserida ham tekshiriladi;
+bunda konteyner ishga tushirilmaydi. CI Python 3.9, 3.12 va 3.13 da testlarni bajaradi.

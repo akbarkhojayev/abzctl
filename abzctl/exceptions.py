@@ -6,6 +6,7 @@ ushlab, `rich` paneli ko'rinishida chiroyli chiqaradi.
 """
 
 from typing import Optional
+from abzctl.security import redact_urls
 
 
 class AbzctlError(Exception):
@@ -15,8 +16,8 @@ class AbzctlError(Exception):
 
     def __init__(self, message: str, hint: Optional[str] = None, title: Optional[str] = None):
         super().__init__(message)
-        self.message = message
-        self.hint = hint
+        self.message = redact_urls(message)
+        self.hint = redact_urls(hint) if hint else None
         if title:
             self.title = title
 

@@ -79,14 +79,19 @@ class SSHClient:
 
     def connect(self) -> None:
         """Serverga ulanadi. Xatoliklarni tushunarli abzctl xatolariga aylantiradi."""
+        if self._client is not None:
+            transport = self._client.get_transport()
+            if transport is not None and transport.is_active():
+                return
+            self.close()
         c = self.creds
         client = paramiko.SSHClient()
         client.load_system_host_keys()
-        # Yangi serverlar uchun host kalitini avtomatik qabul qilamiz (deployer uchun odatiy yondashuv).
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.set_missing_host_key_policy(paramiko.RejectPolicy())
 
         key_file = os.path.expanduser(c.key_file) if c.key_file else None
         if key_file and not os.path.isfile(key_file):
+            client.close()
             raise SSHAuthError(
                 f"SSH kalit fayli topilmadi: {key_file}",
                 hint="--key-file yo'lini tekshiring (masalan: ~/.ssh/id_ed25519).",
@@ -129,7 +134,8 @@ class SSHClient:
                 ) from exc
             raise SSHConnectionError(
                 f"SSH protokol xatosi: {exc}",
-                hint="Port haqiqatan ham SSH serveriga tegishli ekanini tekshiring.",
+                hint=("Server fingerprint'ini tekshiring va avval "
+                      f"ssh -p {c.port} {c.user}@{c.host} orqali ulaning; kalit known_hosts'da bo'lishi kerak."),
             ) from exc
         except paramiko.ssh_exception.NoValidConnectionsError as exc:
             raise SSHConnectionError(
@@ -148,6 +154,10 @@ class SSHClient:
             ) from exc
         except OSError as exc:
             raise SSHConnectionError(f"Tarmoq xatosi: {exc}") from exc
+        finally:
+            # Failed authentication/protocol connections must not leak sockets.
+            if client.get_transport() is None or not client.get_transport().is_authenticated():
+                client.close()
 
         # Uzoq davom etadigan buyruqlar (docker build) paytida ulanish uzilib qolmasligi uchun.
         transport = client.get_transport()
@@ -159,6 +169,7 @@ class SSHClient:
         if self._client is not None:
             self._client.close()
             self._client = None
+        self._is_root = None
 
     def __enter__(self) -> "SSHClient":
         self.connect()
@@ -287,6 +298,9 @@ class SSHClient:
                 raise RemoteCommandError(
                     command, -1, "".join(stdout_chunks), hint=f"Buyruq {timeout:.0f}s ichida tugamadi."
                 )
+            if not transport.is_active() and not channel.exit_status_ready():
+                channel.close()
+                raise SSHConnectionError("Buyruq bajarilayotganda SSH ulanish uzildi.")
             if not got_data:
                 time.sleep(0.05)
 
@@ -322,17 +336,31 @@ class SSHClient:
         """
         if self._client is None:
             raise SSHConnectionError("SSH ulanish o'rnatilmagan.")
+        if not mode or len(mode) not in (3, 4) or any(char not in "01234567" for char in mode):
+            raise ValueError("File mode must be an octal permission string")
         tmp_path = f"/tmp/abzctl-{uuid.uuid4().hex}"
+        staged_path = f"{path}.abzctl-{uuid.uuid4().hex}"
         sftp = self._client.open_sftp()
+        created = False
         try:
-            with sftp.file(tmp_path, "w") as fh:
+            # Exclusive creation prevents following an existing symlink. Restrict
+            # permissions before writing any secret bytes.
+            with sftp.file(tmp_path, "wx") as fh:
+                created = True
+                sftp.chmod(tmp_path, 0o600)
                 fh.write(content)
-        finally:
-            sftp.close()
-        try:
+            cleanup = shlex.quote(f"rm -f -- {shlex.quote(staged_path)}")
             self.run(
-                f"install -m {mode} {shlex.quote(tmp_path)} {shlex.quote(path)}",
+                f"trap {cleanup} EXIT; "
+                f"install -m {mode} {shlex.quote(tmp_path)} {shlex.quote(staged_path)} "
+                f"&& mv -fT -- {shlex.quote(staged_path)} {shlex.quote(path)}",
                 sudo=sudo,
             )
         finally:
-            self.run(f"rm -f {shlex.quote(tmp_path)}", check=False)
+            try:
+                if created:
+                    sftp.remove(tmp_path)
+            except (OSError, paramiko.SSHException):
+                pass
+            finally:
+                sftp.close()

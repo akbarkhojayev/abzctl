@@ -62,6 +62,7 @@ if ($LASTEXITCODE -ne 0) { throw "Virtual muhit yaratib bo'lmadi." }
 
 $VenvPy = Join-Path $VenvDir "Scripts\python.exe"
 & $VenvPy -m pip install -q --upgrade pip
+if ($LASTEXITCODE -ne 0) { throw "pip'ni yangilab bo'lmadi." }
 & $VenvPy -m pip install -q --upgrade $SrcDir
 if ($LASTEXITCODE -ne 0) { throw "abzctl'ni o'rnatib bo'lmadi." }
 
@@ -81,7 +82,9 @@ if (($UserPath -split ";") -notcontains $BinDir) {
 }
 
 Write-Host ""
-Write-Host "✔ abzctl o'rnatildi ($(& $Shim --version))" -ForegroundColor Green
+$InstalledVersion = & $Shim --version
+if ($LASTEXITCODE -ne 0) { throw "abzctl o'rnatildi, ammo ishga tushmadi." }
+Write-Host "✔ abzctl o'rnatildi ($InstalledVersion)" -ForegroundColor Green
 Write-Host ""
 if ($PathAdded) {
     Write-Host "  Yangi terminal oynasini oching (Windows Terminal yoki PowerShell), so'ng yozing:"

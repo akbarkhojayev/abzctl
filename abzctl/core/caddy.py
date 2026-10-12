@@ -67,8 +67,11 @@ def find_unmanaged_conflict(content: str, domain: str) -> bool:
     managed = re.sub(
         r"^# abzctl:begin .*?^# abzctl:end .*?$", "", content, flags=re.MULTILINE | re.DOTALL
     )
-    site_re = re.compile(rf"^\s*(https?://)?{re.escape(domain)}(:\d+)?(\s*,[^{{]*)?\s*\{{", re.MULTILINE)
-    return bool(site_re.search(managed))
+    for match in re.finditer(r"^\s*([^{}\n]+)\s*\{", managed, re.MULTILINE):
+        for site in re.split(r"[\s,]+", match.group(1).strip()):
+            if re.fullmatch(rf"(?:https?://)?{re.escape(domain)}(?::\d+)?", site):
+                return True
+    return False
 
 
 def check_dns(domain: str) -> Optional[List[str]]:
@@ -105,7 +108,11 @@ class CaddyManager:
             "added" — yangi blok qo'shildi, "updated" — mavjud blok yangilandi,
             "unchanged" — konfiguratsiya o'zgarmadi.
         """
-        current = self.ssh.read_file(CADDYFILE, sudo=True) or ""
+        domain = validate_domain(domain)
+        if not 1 <= app_port <= 65535:
+            raise CaddyError("Ilova porti 1–65535 oralig'ida bo'lishi kerak.")
+        original = self.ssh.read_file(CADDYFILE, sudo=True)
+        current = original or ""
 
         if find_unmanaged_conflict(current, domain):
             raise CaddyError(
@@ -139,9 +146,11 @@ class CaddyManager:
         try:
             self.reload()
         except RemoteCommandError as exc:
-            if current:
-                self.ssh.run(f"cp -a {BACKUP} {CADDYFILE}", sudo=True, check=False)
+            if original is not None:
+                self.ssh.write_file(CADDYFILE, original, sudo=True)
                 self.ssh.run("systemctl reload caddy", sudo=True, check=False)
+            else:
+                self.ssh.run(f"rm -f {CADDYFILE}", sudo=True, check=False)
             raise CaddyError(
                 "Caddy'ni reload qilib bo'lmadi, eski Caddyfile tiklandi.",
                 hint="Serverda `journalctl -u caddy -n 50` ni tekshiring.",

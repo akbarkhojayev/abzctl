@@ -133,8 +133,13 @@ class ProjectAnalyzer:
     def _exposed_port(self, dockerfile: str) -> Optional[int]:
         """Dockerfile'dagi birinchi `EXPOSE <port>` qatoridan portni oladi."""
         content = self._read(dockerfile) or ""
+        # EXPOSE in a build stage does not describe the final runtime image.
+        stages = list(re.finditer(r"^\s*FROM\s+", content, re.MULTILINE | re.IGNORECASE))
+        if stages:
+            content = content[stages[-1].start():]
         match = re.search(r"^\s*EXPOSE\s+(\d+)", content, re.MULTILINE | re.IGNORECASE)
-        return int(match.group(1)) if match else None
+        port = int(match.group(1)) if match else None
+        return port if port and 1 <= port <= 65535 else None
 
     def railpack_prepare(self, on_line: Optional[LineCallback] = None) -> ProjectPlan:
         """Railpack bilan loyihani tahlil qiladi va build rejasini tayyorlaydi."""
@@ -332,12 +337,18 @@ class ProjectAnalyzer:
             return secrets.token_urlsafe(32)
         return var.default
 
-    def write_env(self, values: Dict[str, str]) -> None:
+    def write_env(self, values: Dict[str, str], preserve: bool = False) -> None:
         """Serverda `.env` faylini yozadi (faqat egasi o'qiy oladi)."""
         lines = ["# abzctl tomonidan yaratilgan. Qiymatlarni serverda tahrirlashingiz mumkin."]
+        if preserve:
+            lines.insert(0, (self._read(".env") or "").rstrip())
         for key, value in values.items():
-            if re.search(r"[\s#'\"$\\]", value):
-                value = '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) or "\x00" in value:
+                raise DeployError("Noto'g'ri muhit o'zgaruvchisi.")
+            # Escape Compose interpolation as well as dotenv string syntax.
+            value = (value.replace("\\", "\\\\").replace('"', '\\"')
+                     .replace("$", "$$").replace("\n", "\\n").replace("\r", "\\r"))
+            value = '"' + value + '"'
             lines.append(f"{key}={value}")
         self.ssh.write_file(f"{self.dir}/.env", "\n".join(lines) + "\n", mode="600")
         # Serverda yaratilgan .env `git status` da ko'rinmasligi uchun.
@@ -352,8 +363,8 @@ class ProjectAnalyzer:
         """Oldingi deploy'da tanlangan portni o'qiydi (port har safar o'zgarib ketmasligi uchun)."""
         try:
             port = json.loads(self._read(STATE_FILE) or "{}").get("port")
-            return int(port) if port else None
-        except (ValueError, TypeError):
+            return int(port) if port and 1 <= int(port) <= 65535 else None
+        except (ValueError, TypeError, AttributeError):
             return None
 
     def free_port(self, start: int = 3000) -> int:
@@ -367,6 +378,8 @@ class ProjectAnalyzer:
         port = start
         while port in used:
             port += 1
+        if not 1 <= port <= 65535:
+            raise DeployError("Bo'sh TCP port topilmadi.")
         return port
 
     # ------------------------------------------------------------------ 5. build va compose

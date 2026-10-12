@@ -263,7 +263,7 @@ class Provisioner:
         if self.ssh.command_exists("railpack"):
             return False
         self.ssh.run(
-            f"curl -sSL {RAILPACK_INSTALL_URL} | sh -s -- --yes; code=$?;"
+            f"set -o pipefail; curl -fsSL {RAILPACK_INSTALL_URL} | sh -s -- --yes; code=$?;"
             " rm -f /tmp/tmp.*-railpack.*.tar.gz; exit $code",
             sudo=True,
             on_line=on_line,

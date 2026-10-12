@@ -13,9 +13,11 @@ import re
 import shlex
 import time
 from typing import List, Optional, Tuple
+from urllib.parse import urlsplit
 
 from abzctl.core.ssh_client import LineCallback, SSHClient
 from abzctl.exceptions import DeployError
+from abzctl.security import public_repo_url, redact_urls
 
 BASE_DIR = "/var/www"
 COMPOSE_FILES = ("compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml")
@@ -33,7 +35,7 @@ def project_name_from_repo(repo: str) -> str:
     if name.endswith(".git"):
         name = name[:-4]
     # Faqat xavfsiz belgilarni qoldiramiz — bu nom shell buyruqlarida va yo'llarda ishlatiladi.
-    name = re.sub(r"[^a-z0-9._-]+", "-", name.lower()).strip("-.")
+    name = re.sub(r"[^a-z0-9_-]+", "-", name.lower()).strip("-_")[:63]
     if not name:
         raise DeployError(
             f"Repo havolasidan loyiha nomini aniqlab bo'lmadi: {repo}",
@@ -46,9 +48,25 @@ def validate_repo_url(repo: str) -> None:
     """Repo havolasi qo'llab-quvvatlanadigan formatda ekanini tekshiradi."""
     if not re.match(r"^(https?://|git@|ssh://)[^\s'\"`;|&$]+$", repo):
         raise DeployError(
-            f"Noto'g'ri repo havolasi: {repo}",
+            f"Noto'g'ri repo havolasi: {redact_urls(repo)}",
             hint="Masalan: https://github.com/user/project.git yoki git@github.com:user/project.git",
         )
+    try:
+        parts = urlsplit(repo) if "://" in repo else None
+        credential_url = public_repo_url(repo) != repo
+    except ValueError as exc:
+        raise DeployError("Noto'g'ri repo havolasi.") from exc
+    if parts and (not parts.hostname or not parts.path or parts.query or parts.fragment):
+        raise DeployError("Repo havolasi host va loyiha yo'lini ko'rsatsin; query yoki fragment ishlatmang.")
+    if credential_url:
+        raise DeployError("Repo havolasida token yoki parol ishlatmang.",
+                          hint="Private repo uchun serverda SSH deploy key sozlang va git@... havolasini bering.")
+
+
+def validate_project_name(name: str) -> str:
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,62}", name):
+        raise DeployError("Loyiha nomi 1–63 belgi: kichik harf, raqam, _ yoki -; harf/raqam bilan boshlansin.")
+    return name
 
 
 class Deployer:
@@ -65,7 +83,7 @@ class Deployer:
         self.ssh = ssh
         self.repo = repo
         self.branch = branch
-        self.project_name = project_name or project_name_from_repo(repo)
+        self.project_name = validate_project_name(project_name or project_name_from_repo(repo))
         self.project_dir = f"{BASE_DIR}/{self.project_name}"
 
     @property
@@ -76,7 +94,7 @@ class Deployer:
         """`/var/www/<project_name>` papkasini yaratadi va egasini ulangan foydalanuvchiga beradi."""
         user = shlex.quote(self.ssh.creds.user)
         self.ssh.run(
-            f"mkdir -p {self._dir} && chown {user}: {self._dir}",
+            f"test ! -L {self._dir} && mkdir -p {self._dir} && chown {user}: {self._dir}",
             sudo=True,
             hint=f"{self.project_dir} papkasini yaratib bo'lmadi.",
         )
@@ -180,6 +198,8 @@ class Deployer:
 
     def compose_up(self, compose_file: str, on_line: Optional[LineCallback] = None) -> None:
         """`docker compose up -d --build` ni bajaradi."""
+        self.ssh.run(self._compose(compose_file, "config --quiet"), sudo=True,
+                     hint="Compose konfiguratsiyasi yoki .env qiymatlarini tekshiring.")
         self.ssh.run(
             self._compose(compose_file, "up -d --build --remove-orphans"),
             sudo=True,
@@ -205,7 +225,7 @@ class Deployer:
                 check=False,
             )
             code = res.stdout.strip()
-            if code and code != "000":
+            if res.ok and re.fullmatch(r"[1-5][0-9]{2}", code):
                 return True
             time.sleep(delay)
         return False

@@ -12,6 +12,7 @@ import re
 import secrets
 from dataclasses import dataclass
 from typing import Dict, List, Optional
+from abzctl.exceptions import DeployError
 
 # Servislar ko'rinadigan tartibda: birinchi SQL baza DATABASE_URL va DB_* ni oladi.
 SERVICE_ORDER = ("postgres", "mysql", "mongo", "redis")
@@ -292,7 +293,24 @@ def _q(value: str) -> str:
 def parse_services(raw: Optional[str]) -> Dict[str, Dict[str, str]]:
     """Saqlangan servislar faylini o'qiydi."""
     try:
-        data = json.loads(raw or "{}")
-        return {k: v for k, v in data.items() if k in SERVICE_LABELS and isinstance(v, dict)}
-    except ValueError:
-        return {}
+        data = json.loads("{}" if raw is None else raw)
+        if not isinstance(data, dict):
+            raise ValueError("expected an object")
+        result = {}
+        for k, v in data.items():
+            if k not in SERVICE_LABELS:
+                continue
+            if not isinstance(v, dict):
+                raise ValueError("invalid service credentials")
+            required = {"user", "password", "database"} if k != "redis" else set()
+            if k == "mysql":
+                required.add("root_password")
+            if v.get("disabled") or all(isinstance(v.get(key), str) and v[key] for key in required):
+                result[k] = v
+            else:
+                raise DeployError("Saqlangan baza rekvizitlari buzilgan.",
+                                  hint=".abzctl/services.json faylini zaxiradan tiklang; mavjud baza uchun yangi parol yaratilmadi.")
+        return result
+    except ValueError as exc:
+        raise DeployError("Saqlangan baza sozlamalarini o'qib bo'lmadi.",
+                          hint=".abzctl/services.json faylini zaxiradan tiklang.") from exc

@@ -21,6 +21,17 @@ green() { printf '\033[1;32m%s\033[0m\n' "$*"; }
 cyan()  { printf '\033[1;36m%s\033[0m\n' "$*"; }
 red()   { printf '\033[1;31m%s\033[0m\n' "$*" >&2; }
 
+as_root() {
+    if [ "$(id -u)" = 0 ]; then
+        "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo "$@"
+    else
+        red "Paket o'rnatish uchun root yoki sudo kerak."
+        exit 1
+    fi
+}
+
 cyan "==> abzctl o'rnatilmoqda"
 
 # --- 1. Python ---------------------------------------------------------------
@@ -39,8 +50,8 @@ PY="$(find_python || true)"
 if [ -z "$PY" ]; then
     if command -v apt-get >/dev/null 2>&1; then
         cyan "==> Python topilmadi, o'rnatilmoqda (sudo paroli so'ralishi mumkin)"
-        sudo apt-get update -q
-        sudo apt-get install -y -q python3 python3-venv
+        as_root apt-get update -q
+        as_root apt-get install -y -q python3 python3-venv
         PY="$(find_python)"
     else
         red "Python 3.9+ topilmadi."
@@ -55,7 +66,8 @@ if ! "$PY" -m venv --help >/dev/null 2>&1 || ! "$PY" -c 'import ensurepip' 2>/de
     if command -v apt-get >/dev/null 2>&1; then
         cyan "==> python3-venv o'rnatilmoqda"
         PY_VER="$("$PY" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-        sudo apt-get install -y -q "python${PY_VER}-venv" || sudo apt-get install -y -q python3-venv
+        as_root apt-get update -q
+        as_root apt-get install -y -q "python${PY_VER}-venv" || as_root apt-get install -y -q python3-venv
     fi
 fi
 

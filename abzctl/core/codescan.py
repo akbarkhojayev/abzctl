@@ -8,6 +8,7 @@ Bitta faylli loyihalar (masalan faqat `main.py` dan iborat Telegram bot) uchun:
 
 import re
 import sys
+import ast
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Set
 
@@ -61,7 +62,7 @@ _FALLBACK_STDLIB = {
     "socket", "sqlite3", "ssl", "statistics", "string", "struct", "subprocess", "sys", "tempfile",
     "textwrap", "threading", "time", "timeit", "traceback", "types", "typing", "unicodedata",
     "unittest", "urllib", "uuid", "warnings", "weakref", "xml", "zipfile", "zlib", "zoneinfo",
-    "__future__", "typing_extensions",
+    "__future__",
 }
 STDLIB = set(getattr(sys, "stdlib_module_names", ())) or _FALLBACK_STDLIB
 
@@ -90,12 +91,15 @@ def python_imports(sources: Dict[str, str]) -> Set[str]:
     for path, content in sources.items():
         if not path.endswith(".py"):
             continue
-        for match in _PY_IMPORT_RE.finditer(content):
-            if match.group(1):
-                names.add(match.group(1))
-            else:
-                for part in match.group(2).split(","):
-                    names.add(part.strip().split(".")[0])
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names.add(node.module.split(".")[0])
     return names
 
 

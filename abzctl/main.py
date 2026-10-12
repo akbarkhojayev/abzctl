@@ -14,8 +14,9 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
-from typing import Annotated, Dict, Optional
+from dataclasses import dataclass, field
+from contextvars import ContextVar
+from typing import Annotated, Dict, List, Optional
 
 import paramiko
 import typer
@@ -26,10 +27,10 @@ from abzctl import __version__, config, ui
 from abzctl.core import services as svc
 from abzctl.core.analyzer import ProjectAnalyzer
 from abzctl.core.caddy import CaddyManager, check_dns, resolve_host, validate_domain
-from abzctl.core.deployer import Deployer, project_name_from_repo, validate_repo_url
+from abzctl.core.deployer import Deployer, project_name_from_repo, validate_repo_url, validate_project_name
 from abzctl.core.provisioner import Provisioner
 from abzctl.core.ssh_client import ServerCredentials, SSHClient
-from abzctl.exceptions import AbzctlError, SSHAuthError
+from abzctl.exceptions import AbzctlError, DeployError, SSHAuthError
 
 app = typer.Typer(
     name="abzctl",
@@ -41,6 +42,7 @@ app = typer.Typer(
 
 DEFAULT_KEYS = ("~/.ssh/id_ed25519", "~/.ssh/id_rsa", "~/.ssh/id_ecdsa")
 MAX_AUTH_ATTEMPTS = 3
+_NO_PROMPTS = ContextVar("no_prompts", default=False)
 
 
 @dataclass
@@ -61,13 +63,14 @@ class DeployOptions:
     skip_provision: bool = False
     yes: bool = False
     verbose: bool = False
+    env: Dict[str, str] = field(default_factory=dict)
 
 
 # ============================================================================ yordamchilar
 
 
 def _interactive() -> bool:
-    return sys.stdin.isatty()
+    return sys.stdin.isatty() and not _NO_PROMPTS.get()
 
 
 def _handle_errors(func) -> None:
@@ -139,7 +142,11 @@ def _ask_server(o: DeployOptions, last: Optional[config.DeployProfile]) -> None:
             raise AbzctlError("--host berilmagan.", hint="Masalan: abzctl deploy --host 203.0.113.10")
         o.host = _ask("Server IP manzili", default=last.host if last else None)
         o.user = _ask("Foydalanuvchi", default=last.user if last else o.user)
-        o.port = IntPrompt.ask("SSH port", default=last.port if last else o.port)
+        while True:
+            o.port = IntPrompt.ask("SSH port", default=last.port if last else o.port)
+            if 1 <= o.port <= 65535:
+                break
+            ui.warn("Port 1–65535 oralig'ida bo'lishi kerak.")
 
     if o.key_file or o.password:
         return
@@ -208,6 +215,7 @@ def _ask_project(o: DeployOptions, last: Optional[config.DeployProfile]) -> None
 
     if o.domain:
         o.domain = validate_domain(o.domain)
+    validate_project_name(o.name or project_name_from_repo(o.repo))
 
 
 def _ask_domain(o: DeployOptions, last: Optional[config.DeployProfile]) -> None:
@@ -253,16 +261,21 @@ def _detect_port(o: DeployOptions, deployer: Deployer, compose_file: str) -> int
         ui.info(f"Compose faylida bir nechta port bor: {listing}")
         if _interactive():
             return int(Prompt.ask("Qaysi port asosiy ilova?", choices=[str(p) for p in ports], default=str(ports[0])))
-        ui.warn(f"{ports[0]} tanlandi. Boshqasi kerak bo'lsa --app-port bering.")
-        return ports[0]
+        raise DeployError("Compose faylida bir nechta port bor.",
+                          hint="Asosiy HTTP ilova portini --app-port bilan aniq bering.")
 
     ui.warn(
         "Compose faylida tashqariga ochilgan port topilmadi. Ilova ishlashi uchun compose'da "
         "masalan [bold]ports: [\"127.0.0.1:3000:3000\"][/] bo'lishi kerak."
     )
     if _interactive():
-        return IntPrompt.ask("Ilova porti", default=3000)
-    return 3000
+        while True:
+            port = IntPrompt.ask("Ilova porti", default=3000)
+            if 1 <= port <= 65535:
+                return port
+            ui.warn("Port 1–65535 oralig'ida bo'lishi kerak.")
+    raise DeployError("Compose faylida HTTP ilova porti aniqlanmadi.",
+                      hint="Compose ports sozlamasini tekshiring va --app-port bering.")
 
 
 def _choose_services(analyzer: ProjectAnalyzer) -> Dict[str, Dict[str, str]]:
@@ -292,22 +305,35 @@ def _choose_services(analyzer: ProjectAnalyzer) -> Dict[str, Dict[str, str]]:
     return services
 
 
-def _fill_env(analyzer: ProjectAnalyzer, provided: Dict[str, str]) -> None:
+def _fill_env(analyzer: ProjectAnalyzer, provided: Dict[str, str], overrides: Optional[Dict[str, str]] = None) -> None:
     """`.env.example` bo'lsa va serverda `.env` hali yo'q bo'lsa, qiymatlarni so'rab `.env` yaratadi.
 
     `provided` — abzctl o'zi beradigan o'zgaruvchilar (masalan DATABASE_URL): ular so'ralmaydi.
     """
     example, variables = analyzer.missing_env()
+    provided = dict(provided)
+    for var in variables:
+        source = f"ABZCTL_ENV_{var.name}"
+        if var.name not in provided and source in os.environ:
+            provided[var.name] = os.environ[source]
+    empty_required = [var.name for var in variables if var.required and var.name in provided and not provided[var.name]]
+    if empty_required:
+        raise DeployError(f"Majburiy qiymatlar bo'sh: {', '.join(empty_required)}.")
     if not example:
+        if analyzer._exists(".env"):
+            if overrides:
+                analyzer.write_env(overrides, preserve=True)
+        elif provided:
+            analyzer.write_env(provided)
         return
     if not variables:
-        analyzer.write_env({})
+        analyzer.write_env(provided)
         return
 
     values = {var.name: provided[var.name] for var in variables if var.name in provided}
     variables = [var for var in variables if var.name not in provided]
     if values:
-        ui.info(f"{', '.join(values)} — bazaga ulanish uchun abzctl o'zi beradi.")
+        ui.info(f"{', '.join(values)} — tayyor qiymatlar ishlatiladi.")
     source = "Kodda sozlamalar ishlatilgan." if example == "kod" else f"Loyihada [bold]{example}[/] bor."
     if variables and _interactive():
         ui.info(f"{source} Qiymatlarni kiriting [dim](Enter — taklif qilingan qiymat)[/]:")
@@ -315,25 +341,40 @@ def _fill_env(analyzer: ProjectAnalyzer, provided: Dict[str, str]) -> None:
             suggestion = analyzer.suggest_value(var)
             if var.required and not suggestion:
                 # BOT_TOKEN kabi qiymatsiz ishlamaydigan sozlama — bo'sh qoldirib bo'lmaydi.
-                values[var.name] = _ask(f"  {var.name} [dim](majburiy)[/]")
+                while True:
+                    value = Prompt.ask(f"  {var.name} [dim](majburiy)[/]", password=var.secret)
+                    if value:
+                        values[var.name] = value
+                        break
                 continue
             hint = " [dim](avtomatik yaratildi)[/]" if suggestion != var.default else ""
-            values[var.name] = Prompt.ask(f"  {var.name}{hint}", default=suggestion, show_default=not var.secret)
+            values[var.name] = Prompt.ask(f"  {var.name}{hint}", default=suggestion,
+                                          show_default=not var.secret, password=var.secret)
     elif variables:
         values.update({var.name: analyzer.suggest_value(var) for var in variables})
         missing = [var.name for var in variables if var.required and not values[var.name]]
         if missing:
-            ui.warn(f"Qiymati kiritilmagan: {', '.join(missing)}. Serverda {analyzer.dir}/.env faylini to'ldiring.")
+            raise DeployError(f"Majburiy qiymatlar berilmagan: {', '.join(missing)}.",
+                              hint="--env NOM=QIYMAT orqali bering yoki interaktiv rejimda ishga tushiring.")
         else:
             ui.warn("Taklif qilingan qiymatlar ishlatildi. Kerak bo'lsa serverda .env faylini tahrirlang.")
     # Koddagi default bilan bir xil qiymatni .env'ga yozmaymiz — kod o'z default'ini ishlatadi.
     code_defaults = {var.name: var.default for var in variables if var.from_code and var.default}
     values = {k: v for k, v in values.items() if code_defaults.get(k) != v}
+    values.update(provided)
     analyzer.write_env(values)
     ui.success(".env yaratildi (keyingi deploy'larda o'zgarmaydi).")
 
 
 def _run_deploy(o: DeployOptions) -> None:
+    token = _NO_PROMPTS.set(o.yes)
+    try:
+        _run_deploy_inner(o)
+    finally:
+        _NO_PROMPTS.reset(token)
+
+
+def _run_deploy_inner(o: DeployOptions) -> None:
     """To'liq deploy jarayoni: so'rash → ulanish → o'rnatish → deploy → domen."""
     ui.print_banner()
 
@@ -412,10 +453,6 @@ def _run_deploy(o: DeployOptions) -> None:
                     "requirements.txt yo'q — importlardan yaratildi: "
                     f"[bold]{', '.join(packages) or '(tashqi kutubxona yo‘q)'}[/]"
                 )
-            with ui.step("Loyiha turini aniqlash", o.verbose) as s:
-                plan = analyzer.railpack_prepare(on_line=s.on_line)
-        extra = f" [dim]({', '.join(plan.details)})[/]" if plan.details and plan.kind == "railpack" else ""
-        ui.success(f"Loyiha turi: [bold]{plan.label}[/]{extra}")
 
         worker = analyzer.worker_library() if plan.generated else None
         if worker:
@@ -428,7 +465,12 @@ def _run_deploy(o: DeployOptions) -> None:
             _ask_domain(o, last)
 
         services = _choose_services(analyzer) if plan.generated else {}
-        _fill_env(analyzer, provided=svc.app_environment(services))
+        _fill_env(analyzer, provided={**svc.app_environment(services), **o.env}, overrides=o.env)
+        if plan.kind == "railpack":
+            with ui.step("Loyiha turini aniqlash", o.verbose) as s:
+                plan = analyzer.railpack_prepare(on_line=s.on_line)
+        extra = f" [dim]({', '.join(plan.details)})[/]" if plan.details and plan.kind == "railpack" else ""
+        ui.success(f"Loyiha turi: [bold]{plan.label}[/]{extra}")
 
         ui.section("5. Ishga tushirish")
         if plan.generated:
@@ -474,6 +516,7 @@ def _run_deploy(o: DeployOptions) -> None:
                     f"    [bold]nano {deployer.project_dir}/.env[/]\n\n"
                     "So'ng yana [bold]abzctl[/] deb yozing.",
                 )
+            raise DeployError(problem, hint="Konteyner loglarini va serverdagi .env sozlamalarini tekshiring.")
 
         # --- 6. Domen
         if o.domain:
@@ -590,12 +633,19 @@ def deploy(
     skip_provision: Annotated[bool, typer.Option("--skip-provision", help="Dasturlarni tekshirmaslik.")] = False,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Tasdiq so'ramaslik.")] = False,
     verbose: VerboseOpt = False,
+    env: Annotated[Optional[List[str]], typer.Option("--env", help="Muhit qiymati NOM=QIYMAT; takrorlash mumkin.")] = None,
 ) -> None:
     """Flaglar bilan deploy (CI/skriptlar uchun). Berilmagan qiymatlar so'raladi."""
+    env_values = {}
+    for item in env or []:
+        key, separator, value = item.partition("=")
+        if not separator or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            raise typer.BadParameter("--env NOM=QIYMAT shaklida bo'lishi kerak.")
+        env_values[key] = value
     options = DeployOptions(
         host=host, user=user, port=port, password=password, key_file=key_file,
         key_passphrase=key_passphrase, repo=repo, branch=branch, name=name, app_port=app_port,
-        domain=domain, skip_provision=skip_provision, yes=yes, verbose=verbose,
+        domain=domain, skip_provision=skip_provision, yes=yes, verbose=verbose, env=env_values,
     )
     _handle_errors(lambda: _run_deploy(options))
 
