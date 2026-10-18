@@ -1,247 +1,70 @@
 # abzctl
 
-Loyihangizni serverga **bitta buyruq** bilan chiqaradi. Docker, Caddy va SSL (HTTPS)
-ni o'zi o'rnatadi va sozlaydi. Sizdan faqat kerakli narsalarni ketma-ket so'raydi.
+**Git’dan o‘z serveringizga sodda deploy.**
 
----
+SSH orqali web ilovalar va qo‘llab-quvvatlanadigan botlarni VPS’ga chiqaradigan CLI.
+Docker, Caddy va HTTPS sozlamalarini bir oqimga birlashtiradi.
 
-## 1-qadam: O'rnatish (bir marta)
+**[Sayt](https://abzctl.abboskhoja.uz/) · [To‘liq qo‘llanma](https://abzctl.abboskhoja.uz/docs.html) · [Birinchi deploy](https://abzctl.abboskhoja.uz/docs.html#deploy)**
 
-**Linux / macOS** — terminalda:
+## Tez boshlash
+
+Repo’ni yuklab oling:
+
+```bash
+git clone https://github.com/akbarkhojayev/abzctl.git
+cd abzctl
+```
+
+**Linux / macOS:**
 
 ```bash
 bash install.sh
 ```
 
-**Windows** — `install.bat` faylini ikki marta bosing.
+**Windows — PowerShell:**
 
-O'rnatuvchi Python'ni tekshiradi (yo'q bo'lsa o'rnatadi), kerakli hamma narsani o'rnatadi
-va `abzctl` buyrug'ini tayyorlaydi. Tugagach, **terminalni yopib qayta oching**.
+```powershell
+.\install.bat
+```
 
----
-
-## 2-qadam: Deploy
+Terminalni qayta oching va ishga tushiring:
 
 ```bash
 abzctl
 ```
 
-Hammasi shu. abzctl savollarni birma-bir beradi:
+Server ma’lumotlari va Git repo havolasini kiriting, kerakli sozlamalarni to‘ldiring.
+Keyingi yangilash uchun kodni Git’ga push qilib, yana `abzctl` bajaring.
 
-```text
-── 1. Server ──────────────────────────
-Server IP manzili: 203.0.113.10
-Foydalanuvchi (root):
-SSH port (22):
-root@203.0.113.10 paroli (ko'rinmaydi):
-✔ Serverga ulanish
-✔ Serverni tekshirish
+Kompyuterda Git va Python 3.9+, serverda **Ubuntu/Debian**, SSH va root yoki sudo
+huquqi kerak. Birinchi ulanishdan oldin server fingerprint’ini tekshirib,
+SSH kalitini `known_hosts` fayliga kiriting.
 
-── 2. Loyiha ──────────────────────────
-GitHub/GitLab repo havolasi: https://github.com/user/my-app.git
-Domen ulaymizmi? [y/n] (n): y
-Domen: app.example.com
-Boshlaymizmi? [y/n] (y):
+## Imkoniyatlar
 
-── 3. Kerakli dasturlar ───────────────
-✔ curl, git
-✔ Docker
-✔ Docker Compose
-✔ Caddy (HTTPS)
+- Docker Compose, Dockerfile yoki Railpack orqali build va deploy.
+- Caddy orqali domen va avtomatik HTTPS sozlash.
+- `.env` qiymatlari va baza ehtiyojlarini aniqlashga yordam berish.
+- Qo‘llab-quvvatlanadigan botlar va fon jarayonlarini ishga tushirish.
+- Interaktiv ishlatish yoki CI uchun flaglar orqali deploy.
 
-── 4. Deploy ──────────────────────────
-✔ Kodni yuklab olish
-ℹ Port aniqlandi: 3000 (web servisi)
-✔ Build va ishga tushirish
-✔ Ilova javob berishini kutish
+## Qo‘llanma
 
-── 5. Domen va HTTPS ──────────────────
-✔ Caddy: app.example.com → 3000
+Batafsil ko‘rsatmalar alohida saytda:
 
-╭─────────── 🚀 Tayyor! ───────────╮
-│  Manzil: https://app.example.com │
-╰──────────────────────────────────╯
-```
-
-Qavs ichidagi qiymatni qabul qilish uchun shunchaki **Enter** bosing.
-
-Parolni xato kiritsangiz, qayta so'raladi. Kompyuteringizda SSH kalit bo'lsa, abzctl
-uni o'zi topadi va parol o'rniga uni ishlatishni taklif qiladi.
-
----
-
-## Yangilash
-
-Kodni GitHub'ga push qilgandan keyin yana yozing:
-
-```bash
-abzctl
-```
-
-abzctl oxirgi deploy'ni eslab qoladi va faqat bitta narsani so'raydi:
-
-```text
-ℹ Oxirgi deploy: my-app → root@203.0.113.10 (https://app.example.com)
-Shu loyihani yangilaymizmi? [y/n] (y):
-```
-
-SSH parollari saqlanmaydi. Ular har safar so'raladi. Ilova tokenlari va baza
-parollari serverdagi `.env` va `.abzctl/services.json` fayllarida `600` ruxsat bilan
-saqlanadi. Lokal deploy profili ham `600` ruxsat bilan yoziladi.
-
-### Birinchi SSH ulanishi
-
-abzctl serverning SSH kalitini `~/.ssh/known_hosts` orqali tekshiradi. Yangi serverga
-avval oddiy SSH bilan ulaning va ko'rsatilgan fingerprint'ni server provayderi
-ma'lumoti bilan solishtiring:
-
-```bash
-ssh -p 22 root@203.0.113.10
-```
-
-Kalit o'zgarsa, sababini tekshiring. abzctl noma'lum yoki o'zgargan kalitni
-avtomatik qabul qilmaydi.
-
----
-
-## Qanday loyihalarni deploy qila oladi
-
-Loyihangizga hech narsa qo'shish shart emas. abzctl loyihani o'zi tanib oladi:
-
-| Repo'da nima bor | abzctl nima qiladi |
+| Mavzu | Havola |
 |---|---|
-| `compose.yaml` / `docker-compose.yml` | Sizning compose faylingizni ishlatadi |
-| faqat `Dockerfile` | Uni build qiladi, portni `EXPOSE` qatoridan oladi |
-| hech biri yo'q | Loyiha turini o'zi aniqlaydi va image'ni koddan yasaydi ([Railpack](https://railpack.com)) |
+| O‘rnatish | [Linux](https://abzctl.abboskhoja.uz/docs.html#linux) · [macOS](https://abzctl.abboskhoja.uz/docs.html#macos) · [Windows](https://abzctl.abboskhoja.uz/docs.html#windows) |
+| Serverga ulanish | [SSH va server talablari](https://abzctl.abboskhoja.uz/docs.html#ssh) |
+| Sozlamalar | [.env va maxfiy qiymatlar](https://abzctl.abboskhoja.uz/docs.html#environment) · [Domen va HTTPS](https://abzctl.abboskhoja.uz/docs.html#domain) |
+| Loyihalar | [Botlar](https://abzctl.abboskhoja.uz/docs.html#workers) · [Ma’lumotlar bazalari](https://abzctl.abboskhoja.uz/docs.html#databases) |
+| Yangilash va avtomatlashtirish | [Yangilash / private repo](https://abzctl.abboskhoja.uz/docs.html#updates) · [CLI / CI](https://abzctl.abboskhoja.uz/docs.html#cli) |
+| Yordam | [Muammolarni hal qilish](https://abzctl.abboskhoja.uz/docs.html#troubleshooting) · [GitHub Issues](https://github.com/akbarkhojayev/abzctl/issues) |
 
-Avtomatik aniqlanadigan loyiha turlari: **Node.js** (Express, Next.js, Nuxt, Vite, Astro...),
-**Python** (Django, Flask, FastAPI), **Go**, **PHP** (Laravel), **Ruby** (Rails), **Java**,
-**Rust**, **.NET**, **Deno**, **Elixir** va **statik HTML** saytlar.
+Avtomatik rollback va backup boshqaruvi hozir mavjud emas.
 
-Bundan tashqari abzctl o'zi:
-
-- **Port tanlaydi:** serverda bo'sh portni topadi va ilovaga `PORT` muhit o'zgaruvchisi
-  orqali beradi. Keyingi deploy'larda ham shu port saqlanadi.
-- **`.env` yaratadi:** repo'da `.env.example` bo'lsa, undagi har bir sozlamani so'raydi.
-  Maxfiy kalitlarni (`SECRET_KEY`, `JWT_SECRET` va h.k.) avtomatik yaratib beradi.
-- **Swap qo'shadi:** server RAM'i 2 GB dan kam bo'lsa, build xotira yetmay
-  yiqilmasligi uchun.
-- **Log ko'rsatadi:** ilova ishga tushmasa, xatoni topishingiz uchun konteyner loglarini
-  chiqaradi.
-
-> Ilovangiz portni koddan qat'iy belgilamasdan, `PORT` muhit o'zgaruvchisidan olishi
-> kerak. Masalan Node.js'da: `app.listen(process.env.PORT || 3000)`.
-> Ko'pchilik framework'lar buni o'zi qiladi.
-
-Agar loyiha turi aniqlanmasa, abzctl buni aytadi. Bunday holda repo'ga `Dockerfile` qo'shing.
-
-### Ma'lumotlar bazasi
-
-abzctl loyiha kutubxonalariga qarab qaysi baza kerakligini o'zi aniqlaydi va uni
-serverda ishga tushiradi:
-
-| Kodda topilsa | Ishga tushiriladi | Ilovaga beriladi |
-|---|---|---|
-| `pg`, `psycopg`, `asyncpg`, Prisma (postgresql), `DB_CONNECTION=pgsql`... | PostgreSQL | `DATABASE_URL`, `DB_HOST`, `DB_PASSWORD`, `PG*`... |
-| `mysql2`, `pymysql`, `mysqlclient`, `DB_CONNECTION=mysql`... | MySQL | `DATABASE_URL`, `DB_*`, `MYSQL_*` |
-| `mongoose`, `pymongo`, `motor`... | MongoDB | `MONGODB_URI`, `MONGO_URL` |
-| `redis`, `ioredis`, `bullmq`, `predis`... | Redis | `REDIS_URL`, `REDIS_HOST` |
-
-Parollar avtomatik yaratiladi. Ma'lumotlar qayta deploy qilganda ham saqlanib qoladi.
-Parollar serverda `/var/www/<loyiha>/.abzctl/services.json` faylida turadi.
-
-### Telegram botlar va fon jarayonlari
-
-Faqat bitta `main.py` (yoki `bot.py`, `index.js`) dan iborat bot ham deploy bo'ladi:
-
-- **Kutubxonalar:** `requirements.txt` bo'lmasa, abzctl uni `import` qatorlaridan
-  yaratadi (`aiogram`, `python-telegram-bot`, `pyTelegramBotAPI`, `python-dotenv`...).
-- **Sozlamalar:** koddagi `os.getenv("BOT_TOKEN")` kabi qatorlarni topib, tokenni
-  so'raydi. Tokenni bo'sh qoldirib bo'lmaydi.
-- **Port va domen kerak emas:** abzctl botni o'zi taniydi (aiogram, telebot, telegraf,
-  grammy, discord.py...) va domen so'ramaydi.
-- **Doim ishlab turadi:** bot yiqilsa yoki server qayta yoqilsa, o'zi qayta ishga tushadi.
-
-Token noto'g'ri bo'lsa, abzctl buni aytadi. Tokenni serverda tuzating
-(`nano /var/www/<bot>/.env`) va yana `abzctl` deb yozing.
-
----
-
-## Domen ulash uchun
-
-1. Domen provayderingizda **A-rekord** yarating: `app.example.com` → server IP.
-2. Serverda **80** va **443** portlari ochiq bo'lsin. Bulut provayderlarida (AWS,
-   Hetzner, DigitalOcean) bu portlarni provayder panelida oching.
-
-SSL sertifikat avtomatik olinadi. DNS hali sozlanmagan bo'lsa, abzctl oxirida nima qilish
-kerakligini ko'rsatadi.
-
----
-
-## Server talablari
-
-- **Ubuntu** yoki **Debian**
-- `root` foydalanuvchi, yoki `sudo` huquqiga ega foydalanuvchi
-
----
-
-## Muammo bo'lsa
-
-Xatolik qizil oynada ko'rsatiladi, uning ostida 💡 belgisi bilan nima qilish kerakligi
-yoziladi.
-
-| Muammo | Yechim |
-|---|---|
-| Serverga ulanib bo'lmadi | IP va portni tekshiring, server yoqilganmi? |
-| Parol xato | Qayta kiriting (3 marta urinish mumkin) |
-| Loyiha turi aniqlanmadi | Repo'ga `Dockerfile` qo'shing |
-| Ilova javob bermadi | Chiqarilgan loglarni o'qing; ilova `PORT` o'zgaruvchisini tinglayotganini tekshiring |
-| Private (yopiq) repo klonlanmadi | Serverda repo uchun SSH deploy key sozlang va `git@github.com:user/app.git` havolasini ishlating |
-| SSH server kaliti topilmadi | Oddiy `ssh` bilan ulaning va server fingerprint'ini tekshiring |
-| Bir nechta Compose porti topildi | `--app-port` bilan asosiy HTTP portini bering |
-
-Batafsil log ko'rish uchun: `abzctl deploy -v`
-
-Serverni deploy'siz faqat tekshirish uchun: `abzctl check-server`
-
----
-
-## Qo'shimcha: savol-javobsiz ishlatish (CI/skriptlar uchun)
-
-`-y` barcha interaktiv savollarni o'chiradi. Server va repo parametrlarini bering;
-majburiy token yoki sozlama yetishmasa, buyruq xato kodi bilan tugaydi:
-
-```bash
-ABZCTL_PASSWORD='parol' abzctl deploy -h 203.0.113.10 -r https://github.com/user/app.git -d app.example.com -y
-```
-
-Ilova sozlamalarini takrorlanadigan `--env NOM=QIYMAT` bilan berish mumkin.
-Bu flag mavjud `.env` faylidagi berilgan qiymatni ham yangilaydi; boshqa sozlamalar
-saqlanadi. Baza uchun abzctl yaratadigan ulanish qiymatlari konteynerda ustun turadi.
-
-Maxfiy qiymatni buyruq argumentiga yozmaslik uchun `ABZCTL_ENV_<NOM>` muhit
-o'zgaruvchisidan foydalaning. Bu usul `.env` birinchi yaratilayotganda ishlatiladi:
-
-```bash
-ABZCTL_PASSWORD='parol' ABZCTL_ENV_BOT_TOKEN='token' abzctl deploy \
-  -h 203.0.113.10 -r https://github.com/user/bot.git -y
-```
-
-Private repo uchun serverning GitHub/GitLab SSH deploy key'i va Git hostining
-`known_hosts` yozuvi oldindan sozlangan bo'lishi kerak. Havolaga token yoki parol
-qo'shish qabul qilinmaydi. Oldingi lokal profildagi URL tokenlari avtomatik olib tashlanadi.
-
-`--name` 1–63 belgidan iborat bo'ladi: kichik harf, raqam, `_` yoki `-`;
-birinchi belgi harf yoki raqam bo'lishi kerak.
-
-Ilova HTTP javob bermasa yoki bot qayta-qayta to'xtasa, abzctl `exit code 1`
-bilan tugaydi. Oxirgi muvaffaqiyatli deploy profili almashtirilmaydi va domen
-konfiguratsiyasi yangilanmaydi. Oldingi konteyner versiyasiga avtomatik rollback
-qilinmaydi; muvaffaqiyatsiz yangilashdan keyin loglarni tekshirish kerak.
-
-Barcha flaglar ro'yxati: `abzctl deploy --help`
-
-## Ishlab chiqish va tekshiruv
+## Hissa qo‘shish
 
 ```bash
 python -m pip install -e .
@@ -249,6 +72,7 @@ python -m unittest discover -s tests -v
 bash -n install.sh
 ```
 
-Testlar SSH va deploy oqimini mock bilan tekshiradi. Docker Compose mavjud bo'lsa,
-generatsiya qilingan YAML va `.env` haqiqiy Compose parserida ham tekshiriladi;
-bunda konteyner ishga tushirilmaydi. CI Python 3.9, 3.12 va 3.13 da testlarni bajaradi.
+Xatolar va takliflar uchun [issue oching](https://github.com/akbarkhojayev/abzctl/issues)
+yoki pull request yuboring.
+
+[MIT litsenziyasi](LICENSE).
